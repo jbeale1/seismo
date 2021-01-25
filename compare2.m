@@ -19,12 +19,12 @@ f1=[dir "/" fname1];  # create full pathname
 f2=[dir "/" fname2];  # create full pathname
 
 d1 = dlmread(f1, ",", 6,0);  # read CSV file into variable
-hours = (length(d1)-1) / (fs*60*60);
+hours1 = (length(d1)-1) / (fs*60*60);
 d2 = dlmread(f2, ",", 6,0);  # read CSV file into variable
-hours = (length(d1)-1) / (fs*60*60);
+hours2 = (length(d2)-1) / (fs*60*60);
 
-printf("%s hours: %5.2f\n", fname1,hours);
-printf("%s hours: %5.2f\n", fname2,hours);
+printf("%s hours: %5.2f\n", fname1,hours1);
+printf("%s hours: %5.2f\n", fname2,hours2);
 
 
 # plot(d1); hold on; plot(d2);
@@ -112,7 +112,6 @@ loglog(xf,Pxx);  # log-log plot of power spectrum
 
 # --------------
 #{
-
 
 -----------------------------------
 Input Files:
