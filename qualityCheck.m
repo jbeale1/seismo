@@ -1,48 +1,37 @@
 # GNU Octave script
 # Read two CSV format files (seismometer records)
 # Compute correlation between them, in a sliding window
-# Plot areas of lower correlation (often some kind of glitch)
-# J.Beale 25-JAN-2021
+# Count/plot areas of lower correlation (often some kind of glitch)
+# J.Beale 26-JAN-2021
 # -------------------------------------------------------------------
 
 pkg load signal                  # for high & low-pass filter
 
 # pkg load optim       # linear regression
 # -------------------------------------------------------------------
-global startOff
-global stopOff
-global d1
-global d2
-global w1f
-global w2fs
-global fname1
-global fname2
-global fs
-global c
-global fmax
+global startOff  # offset of start of data frame
+global stopOff   # offset of end of data frame
+global d1        # 1st dataset (raw data)
+global d2        # 2nd dataset (raw data)
+global w1f       # window into filtered dataset 1
+global w2fs      # window into filtered dataset 1 (scaled)
+global fname1    # filename of dataset 1
+global fname2    # filename of dataset 2
+global fs        # sample rate (samples per second)
+global c         # linear correlation of this frame
+global fmax      # frequency of power spectrum max (Hz)
+global bumpFrames = 0  # how many frames had glitch (low correlation)
 # ===================================================================
 
-fs = 100;   # signal sample rate (samples per second)
-wsize = 200; # size of window (seconds) (was 400)
-fhp = 0.035;    # filter: highpass frequency shoulder in Hz
-flp = 0.200;    # lowpass frequency
-poles = 2;      # filter poles
-wfrac = 0.25;   # fraction of window width to slide each step
+fs = 100;           # signal sample rate (samples per second)
+wsizeS = 200;       # size of window (seconds) (was 400)
+wstepS = wsizeS/4;  # window step size (seconds)
+fhp = 0.035;        # filter: highpass frequency shoulder in Hz
+flp = 0.200;        # lowpass frequency
+poles = 2;          # filter poles
+showPlot = false;   # true will save plot PNGs of glitch areas
 
 dir="/home/pi/hammer/obspy";  # working directory
-#fname1 = "2021-01-25T1926_SHARK.csv";
-#fname2 = "2021-01-25T1926_SHRK2.csv";
-
-#fname1 = "2021-01-25T0634_SHARK.csv";
-#fname2 = "2021-01-25T0634_SHRK2.csv";
-
-# START_TIME 2021-01-25T06:34:47.992Z
-# @ +25637 sec (len = 483s) 
-# 2021-01-25 T 06:34:47.992000Z + 07:07:17
-# = 2021-01-25 T 13:42:04 (UTC)
-
-#fname1 = "2021-01-23T2007_SHARK.csv";  # SHARK is ~ 1.1 * SHRK2
-#fname2 = "2021-01-23T2007_SHRK2.csv";
 
 arg_list = argv ();        # command-line inputs to this function
 args = length(arg_list);   # how many args?
@@ -55,7 +44,6 @@ else
   fname1 = arg_list{1};      # first arg
   fname2 = arg_list{2};      # first arg
 endif
-
 
 # ===================================================================
 
@@ -143,6 +131,7 @@ endfunction
 cMin = 1.0; cMax = -1.0; # correlation 
 sMin = 1000; sMax = -1000; # SNR value (dB)
 rMin = 1e9;  rMax = 0; # 1st residual of linear fit
+fMin = 1e9;  fMax = 0; # frequency of power spectrum maximum
   
 f1=[dir "/" fname1];  # create full pathname
 f2=[dir "/" fname2];  # create full pathname
@@ -162,9 +151,16 @@ d12L = min(d1L,d2L);
 printf("index, sec, corr, fmax, SNR, shift, Res2, Res1\n"); # CSV file header
 printf("# %s hours: %5.2f\n", fname1,hours1);
 printf("# %s hours: %5.2f\n", fname2,hours2);
+if (d1L != d2L)
+  printf("# WARNING input channels are not same length\n");
+endif
 
-wlen = fs * wsize;   # signal window length, in samples
-#startOff = 1632500 + 0*wlen/4;  # starting offset index for S wave
+wlen = fs * wsizeS;   # signal window length, in samples
+wstep = fs * wstepS;  # window increment, in samples
+
+n = int32(d12L / wstep);
+fpArray = zeros(n,1);  # initialize array large enough for all freq vals  
+fpi = 1; # pointer to current element of fpArray()
 
 [b,a] = butter(poles,double(flp)/fs, "low");  # create lowpass
 d1f = filter(b,a, d1);
@@ -175,13 +171,14 @@ d1f = filter(b,a, d1f);
 d2f = filter(b,a, d2f);
 i=0;  # variable used to step window through full dataset
 
+
 # i=519; # glitch location in 2021-01-25T0634_SHARK.csv
 while (true)  
-  startOff = 1 + i*wlen*wfrac;  # start at the beginning
+  startOff = 1 + i*wstep;  # start at the beginning
   #startOff = 16080*fs;  # start on background microseism
   stopOff = startOff + wlen;
   if (stopOff > d12L)  # have we reached the end of the data?
-    startOff = 1 + (i-1)*wlen*wfrac;  # step back one
+    startOff = 1 + (i-1)*wstep;  # step back one
     stopOff = startOff + wlen;  
     break;
   end
@@ -228,28 +225,35 @@ while (true)
   w12f = (w1f + w2fs)/2;    # average of both signals
   [Pxx, w] = periodogram (w12f);  # power spectral density (real)
   plen = length(Pxx);
-  fmax = fs/2;
-  xf = linspace((fmax/plen),fmax,plen);  # frequency plot
+  fN = fs/2;     # Nyquist frequency = sample rate / 2  
+  xf = linspace((fN/plen),fN,plen);  # frequency plot
   Pxx = sqrt(Pxx);
   [fpeak, ifpeak] = max(Pxx);  # find peak of frequency spectrum
-  fmax = xf(ifpeak);  # frequency at peak
+  fPk = xf(ifpeak);  # frequency at peak
 
   res2p = r2m*r1m;
   printf("%03d, %5.0f, %6.4f, %5.3f, %5.2f, %d, %5.4f, %5.4f\n",
-     i,(startOff/fs),c,fmax,SNRdB,offset,res2p,r1m);
-  if (res2p > 4000)  # something wrong here
-    doplot()  # generate & save out the plot
+     i,(startOff/fs),c,fPk,SNRdB,offset,res2p,r1m);
+  if (res2p > 4000)  # Whoops! difference too large; something wrong
+    if (showPlot)
+      doplot()  # generate & save out the plot
+    endif
+    bumpFrames = bumpFrames + 1;
+  else
+    # good frame: update records if this was a min or max value
+    [cMin cMax] = pksave(c, cMin, cMax);  # correlation min & max
+    [sMin sMax] = pksave(SNRdB, sMin, sMax); # SNR min & max
+    [rMin rMax] = pksave(r1m, rMin, rMax); # 1st Residual min & max
+    [fMin fMax] = pksave(fPk, fMin, fMax); # 1st Residual min & max
+    fpArray(fpi) = fPk;  # record each peak frequency
+    fpi = fpi + 1;
   endif
   
-  # update records if this was a min or max value
-  [cMin cMax] = pksave(c, cMin, cMax);  # correlation min & max
-  [sMin sMax] = pksave(SNRdB, sMin, sMax); # SNR min & max
-  [rMin rMax] = pksave(r1m, rMin, rMax); # 1st Residual min & max
   
 #{
   printf("%02d Start: %5.1f (s) Length: %5.1f (s)\n", i,(startOff/fs),(wlen/fs));
   printf("Correlation: %6.4f\n", c);  # this is the (scalar) correlation value
-  printf("Fpeak = %5.3f Hz (%5.2f s) %5.2e\n", fmax,(1/fmax),fpeak);   
+  printf("Fpeak = %5.3f Hz (%5.2f s) %5.2e\n", fPk,(1/fPk),fpeak);   
   printf("BP Filter: %5.3f - %5.3f Hz (%d poles)\n", fhp,flp,poles);
   printf("      Signal RMS = %5.3f\n", sig1m);
   printf("1st residual RMS = %5.3f\n", r1m);
@@ -266,10 +270,15 @@ while (true)
 endwhile
 # =====================================================================
 
+fMedian = fpArray(int32(fpi / 2));  # find the median 
+hCover = ((wstepS * i) + (wsizeS - wstepS)); # seconds covered
 printf("# Correlation min/max: %5.3f %5.3f\n",cMin,cMax);
 printf("# SNR min/max: %5.3f %5.3f\n",sMin,sMax);
 printf("# Residual min/max: %5.3f %5.3f\n",rMin,rMax);
-
+printf("# Fpeak (Hz) min/med/max: %5.3f %5.3f %5.3f\n",
+    fMin,fMedian,fMax);
+printf("# Bump frames: %d / %d  (%5.3f hours)\n",
+    bumpFrames,i,hCover/3600);
 # doplot();
 
 #print ("-S1920,900", "-dsvg", "test1.svg");
