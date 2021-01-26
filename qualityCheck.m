@@ -1,12 +1,14 @@
 # GNU Octave script
-# Read two CSV format files (eg. seismometer records)
-# Compute correlation between them, in a given window
-# Save plots of lower correlation (some kind of glitch)
+# Read two CSV format files (seismometer records)
+# Compute correlation between them, in a sliding window
+# Plot areas of lower correlation (often some kind of glitch)
 # J.Beale 25-JAN-2021
+# -------------------------------------------------------------------
 
 pkg load signal                  # for high & low-pass filter
-# pkg load optim       # linear regression
 
+# pkg load optim       # linear regression
+# -------------------------------------------------------------------
 global startOff
 global stopOff
 global d1
@@ -18,6 +20,45 @@ global fname2
 global fs
 global c
 global fmax
+# ===================================================================
+
+fs = 100;   # signal sample rate (samples per second)
+wsize = 200; # size of window (seconds) (was 400)
+fhp = 0.035;    # filter: highpass frequency shoulder in Hz
+flp = 0.200;    # lowpass frequency
+poles = 2;      # filter poles
+wfrac = 0.25;   # fraction of window width to slide each step
+
+dir="/home/pi/hammer/obspy";  # working directory
+#fname1 = "2021-01-25T1926_SHARK.csv";
+#fname2 = "2021-01-25T1926_SHRK2.csv";
+
+#fname1 = "2021-01-25T0634_SHARK.csv";
+#fname2 = "2021-01-25T0634_SHRK2.csv";
+
+# START_TIME 2021-01-25T06:34:47.992Z
+# @ +25637 sec (len = 483s) 
+# 2021-01-25 T 06:34:47.992000Z + 07:07:17
+# = 2021-01-25 T 13:42:04 (UTC)
+
+#fname1 = "2021-01-23T2007_SHARK.csv";  # SHARK is ~ 1.1 * SHRK2
+#fname2 = "2021-01-23T2007_SHRK2.csv";
+
+arg_list = argv ();        # command-line inputs to this function
+args = length(arg_list);   # how many args?
+
+if (args < 2)
+  printf("Usage: quakeCor1 <fname1> <fname2>\n");
+  printf(" needs filenames of two CSV files to compare\n");
+  exit(1);
+else
+  fname1 = arg_list{1};      # first arg
+  fname2 = arg_list{2};      # first arg
+endif
+
+
+# ===================================================================
+
 
 # ---------------------------------------------
 # Create & save comparison plot of raw, filtered signals
@@ -77,30 +118,32 @@ global fmax
  print ("-S2000,900", "-dpng", fout);
 
 endfunction
+
+# ====================================================================
+# keep track of min and max values of a variable
+# --------------------------------------------------------------------
+function [min max] = pksave(x,xMin,xMax)
+  if (x < xMin)
+    min = x;
+  else
+    min = xMin;
+  endif
+  
+  if (x > xMax)
+    max = x;
+  else
+    max = xMax;
+  endif
+endfunction
+
 # ====================================================================
 
-fs = 100;   # signal sample rate (samples per second)
-wsize = 200; # size of window (seconds) (was 400)
-fhp = 0.035;    # filter: highpass frequency shoulder in Hz
-flp = 0.200;    # lowpass frequency
-poles = 2;      # filter poles
-wfrac = 0.25;   # fraction of window width to slide each step
 
-dir="/home/pi/hammer/obspy";  # working directory
-#fname1 = "2021-01-25T1926_SHARK.csv";
-#fname2 = "2021-01-25T1926_SHRK2.csv";
-
-fname1 = "2021-01-25T0634_SHARK.csv";
-fname2 = "2021-01-25T0634_SHRK2.csv";
-
-# START_TIME 2021-01-25T06:34:47.992Z
-# @ +25637 sec (len = 483s) 
-# 2021-01-25 T 06:34:47.992000Z + 07:07:17
-# = 2021-01-25 T 13:42:04 (UTC)
-
-#fname1 = "2021-01-23T2007_SHARK.csv";  # SHARK is ~ 1.1 * SHRK2
-#fname2 = "2021-01-23T2007_SHRK2.csv";
-
+  # initialize min,max vars with opposite extrema
+cMin = 1.0; cMax = -1.0; # correlation 
+sMin = 1000; sMax = -1000; # SNR value (dB)
+rMin = 1e9;  rMax = 0; # 1st residual of linear fit
+  
 f1=[dir "/" fname1];  # create full pathname
 f2=[dir "/" fname2];  # create full pathname
 
@@ -120,10 +163,8 @@ printf("index, sec, corr, fmax, SNR, shift, Res2, Res1\n"); # CSV file header
 printf("# %s hours: %5.2f\n", fname1,hours1);
 printf("# %s hours: %5.2f\n", fname2,hours2);
 
-
 wlen = fs * wsize;   # signal window length, in samples
 #startOff = 1632500 + 0*wlen/4;  # starting offset index for S wave
-
 
 [b,a] = butter(poles,double(flp)/fs, "low");  # create lowpass
 d1f = filter(b,a, d1);
@@ -199,6 +240,12 @@ while (true)
   if (res2p > 4000)  # something wrong here
     doplot()  # generate & save out the plot
   endif
+  
+  # update records if this was a min or max value
+  [cMin cMax] = pksave(c, cMin, cMax);  # correlation min & max
+  [sMin sMax] = pksave(SNRdB, sMin, sMax); # SNR min & max
+  [rMin rMax] = pksave(r1m, rMin, rMax); # 1st Residual min & max
+  
 #{
   printf("%02d Start: %5.1f (s) Length: %5.1f (s)\n", i,(startOff/fs),(wlen/fs));
   printf("Correlation: %6.4f\n", c);  # this is the (scalar) correlation value
@@ -219,6 +266,9 @@ while (true)
 endwhile
 # =====================================================================
 
+printf("# Correlation min/max: %5.3f %5.3f\n",cMin,cMax);
+printf("# SNR min/max: %5.3f %5.3f\n",sMin,sMax);
+printf("# Residual min/max: %5.3f %5.3f\n",rMin,rMax);
 
 # doplot();
 
@@ -267,5 +317,11 @@ BP Filter: 0.035 - 0.200 Hz (2 poles)
 Correlation: 0.8224
 Fpeak = 0.146 Hz (6.83 s) 8.57e+02
 Signal RMS = 30.016  SNR = 9.78 dB
+---
+Overall 6 hour file:
+# Correlation min/max: -0.386 0.994
+# SNR min/max: -21.701 56.257
+# Residual min/max: 12.033 135.208
+
         
 #}
