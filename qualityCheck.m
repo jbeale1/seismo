@@ -270,7 +270,8 @@ while (true)
 endwhile
 # =====================================================================
 
-fMedian = fpArray(int32(fpi / 2));  # find the median 
+fpSarray = sort(fpArray(1:fpi-1)); # sort all peak frequency readings
+fMedian = fpSarray(int32(fpi / 2));  # find the median 
 hCover = ((wstepS * i) + (wsizeS - wstepS)); # seconds covered
 printf("# Correlation min/max: %5.3f %5.3f\n",cMin,cMax);
 printf("# SNR min/max: %5.3f %5.3f\n",sMin,sMax);
