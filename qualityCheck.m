@@ -1,8 +1,12 @@
-# GNU Octave script
+# qualityCheck.m - GNU Octave script 
+#
 # Read two CSV format files (seismometer records)
-# Compute correlation between them, in a sliding window
-# Count/plot areas of lower correlation (often some kind of glitch)
-# J.Beale 26-JAN-2021
+# Compute stats & correlation between them, in a sliding window
+# Exclude and optionally plot areas of lower correlation
+#   which is often some kind of local glitch or failure
+#
+# Takes three arguments: two input filenames, one output filename
+# J.Beale 28-JAN-2021
 # -------------------------------------------------------------------
 
 pkg load signal                  # for high & low-pass filter
@@ -36,17 +40,17 @@ dir="/home/pi/hammer/obspy";  # working directory
 arg_list = argv ();        # command-line inputs to this function
 args = length(arg_list);   # how many args?
 
-if (args < 2)
-  printf("Usage: quakeCor1 <fname1> <fname2>\n");
-  printf(" needs filenames of two CSV files to compare\n");
+if (args < 3)
+  printf("Usage: quakeCor1 <fname1> <fname2> <fout>\n");
+  printf(" filenames of two CSV files to compare, and output file\n");
   exit(1);
 else
-  fname1 = arg_list{1};      # first arg
-  fname2 = arg_list{2};      # first arg
+  fname1 = arg_list{1};      # data file #1
+  fname2 = arg_list{2};      # data file #2
+  fname3 = arg_list{3};      # output file
 endif
 
 # ===================================================================
-
 
 # ---------------------------------------------
 # Create & save comparison plot of raw, filtered signals
@@ -102,8 +106,8 @@ global fmax
 #---------------------------
 # save plot image
 #---------------------------
- fout = [fname1(1:end-4) offs ".png"];
- print ("-S2000,900", "-dpng", fout);
+ fpout = [fname1(1:end-4) offs ".png"];
+ print ("-S2000,900", "-dpng", fpout);
 
 endfunction
 
@@ -128,6 +132,7 @@ endfunction
 
 
   # initialize min,max vars with opposite extrema
+pMin = 1e9; pMax = 0;    # averaged total RMS power in filtered signal
 cMin = 1.0; cMax = -1.0; # correlation 
 sMin = 1000; sMax = -1000; # SNR value (dB)
 rMin = 1e9;  rMax = 0; # 1st residual of linear fit
@@ -135,10 +140,12 @@ fMin = 1e9;  fMax = 0; # frequency of power spectrum maximum
   
 f1=[dir "/" fname1];  # create full pathname
 f2=[dir "/" fname2];  # create full pathname
-
+f3=[dir "/" fname3];  # create full pathname
 
 d1 = dlmread(f1, ",", 6,0);  # read CSV file into variable
 d2 = dlmread(f2, ",", 6,0);  # read CSV file into variable
+
+fout = fopen (f3, "w");  # open output file
 
 d1L = length(d1);
 hours1 = (d1L-1) / (fs*60*60);
@@ -148,11 +155,11 @@ hours2 = (d2L-1) / (fs*60*60);
 
 d12L = min(d1L,d2L);
 
-printf("index, sec, corr, fmax, SNR, shift, Res2, Res1\n"); # CSV file header
-printf("# %s hours: %5.2f\n", fname1,hours1);
-printf("# %s hours: %5.2f\n", fname2,hours2);
+fprintf(fout,"index, sec, corr, fmax, SNR, shift, Res2, Res1\n"); # CSV file header
+fprintf(fout,"# %s hours: %5.2f\n", fname1,hours1);
+fprintf(fout,"# %s hours: %5.2f\n", fname2,hours2);
 if (d1L != d2L)
-  printf("# WARNING input channels are not same length\n");
+  fprintf(fout,"# WARNING input channels are not same length\n");
 endif
 
 wlen = fs * wsizeS;   # signal window length, in samples
@@ -160,7 +167,11 @@ wstep = fs * wstepS;  # window increment, in samples
 
 n = int32(d12L / wstep);
 fpArray = zeros(n,1);  # initialize array large enough for all freq vals  
-fpi = 1; # pointer to current element of fpArray()
+cArray = fpArray;      # initialize others same way
+sArray = fpArray;
+rArray = fpArray;
+
+Ai = 1; # pointer to current element of fpArray(), cArray() etc.
 
 [b,a] = butter(poles,double(flp)/fs, "low");  # create lowpass
 d1f = filter(b,a, d1);
@@ -172,7 +183,6 @@ d2f = filter(b,a, d2f);
 i=0;  # variable used to step window through full dataset
 
 
-# i=519; # glitch location in 2021-01-25T0634_SHARK.csv
 while (true)  
   startOff = 1 + i*wstep;  # start at the beginning
   #startOff = 16080*fs;  # start on background microseism
@@ -196,9 +206,11 @@ while (true)
   
   w2fs = w2f * scalefac;  # adjusted to match amplitude
   residual = w1f - w2fs;  # residue after 1st order linear fit
+  average = (w1f + w2fs)/2;  # residue after 1st order linear fit
   
   # c = w1f \ w2fs;    # linear correlation?
   r1m = rms(residual);
+  r3 = rms(average);
 
   #sig1m = rms(w1f);
   rs = r1 / r1m; # rs =  7.2480
@@ -232,7 +244,7 @@ while (true)
   fPk = xf(ifpeak);  # frequency at peak
 
   res2p = r2m*r1m;
-  printf("%03d, %5.0f, %6.4f, %5.3f, %5.2f, %d, %5.4f, %5.4f\n",
+  fprintf(fout,"%03d, %5.0f, %6.4f, %5.3f, %5.2f, %d, %5.4f, %5.4f\n",
      i,(startOff/fs),c,fPk,SNRdB,offset,res2p,r1m);
   if (res2p > 4000)  # Whoops! difference too large; something wrong
     if (showPlot)
@@ -241,55 +253,56 @@ while (true)
     bumpFrames = bumpFrames + 1;
   else
     # good frame: update records if this was a min or max value
+    [pMin pMax] = pksave(r3, pMin, pMax);  # avg RMS min & max
     [cMin cMax] = pksave(c, cMin, cMax);  # correlation min & max
     [sMin sMax] = pksave(SNRdB, sMin, sMax); # SNR min & max
     [rMin rMax] = pksave(r1m, rMin, rMax); # 1st Residual min & max
     [fMin fMax] = pksave(fPk, fMin, fMax); # 1st Residual min & max
-    fpArray(fpi) = fPk;  # record each peak frequency
-    fpi = fpi + 1;
+    pArray(Ai) = r3;     # record each correlation coeff.
+    cArray(Ai) = c;     # record each correlation coeff.
+    sArray(Ai) = SNRdB;
+    rArray(Ai) = r1m;
+    fpArray(Ai) = fPk;  # record each peak frequency
+    Ai = Ai + 1;
   endif
-  
-  
-#{
-  printf("%02d Start: %5.1f (s) Length: %5.1f (s)\n", i,(startOff/fs),(wlen/fs));
-  printf("Correlation: %6.4f\n", c);  # this is the (scalar) correlation value
-  printf("Fpeak = %5.3f Hz (%5.2f s) %5.2e\n", fPk,(1/fPk),fpeak);   
-  printf("BP Filter: %5.3f - %5.3f Hz (%d poles)\n", fhp,flp,poles);
-  printf("      Signal RMS = %5.3f\n", sig1m);
-  printf("1st residual RMS = %5.3f\n", r1m);
-  printf("2nd residual RMS = %5.3f (off: %d)\n", r2m,offset);
-  printf("        SNR (dB) = %5.2f\n", SNRdB);
-  printf("\n");
-#}
-
-  #hold off; plot(w1f); hold on; plot(w2fs); axis("tight"); grid on;
-  #c = kbhit(); # wait for keypress
-  
-  #break;  # DEBUG - run just one window
+   
   i += 1;
 endwhile
+
 # =====================================================================
+#       sort all peak frequency readings, to enable finding median
+pAS  = sort(pArray(1:Ai-1));
+cAS  = sort(cArray(1:Ai-1));
+sAS  = sort(sArray(1:Ai-1));
+rAS  = sort(rArray(1:Ai-1));
+fpAS = sort(fpArray(1:Ai-1));
 
-fpSarray = sort(fpArray(1:fpi-1)); # sort all peak frequency readings
-fMedian = fpSarray(int32(fpi / 2));  # find the median 
+mpoint = int32(Ai / 2);  # off-by-1/2 if Ai is even, but oh well
+m2 = int32(Ai / 3);
+m3 = m2*2;
+# find the median 
+pMedian = pAS(mpoint);
+cMedian = cAS(mpoint);
+sMedian = sAS(mpoint);
+rMedian = rAS(mpoint);
+fMedian = fpAS(mpoint);  
+
+# find the width of the central 1/3 of the full distribution
+pT = pAS(m3) - pAS(m2);
+cT = cAS(m3) - cAS(m2);
+sT = sAS(m3) - sAS(m2);
+rT = rAS(m3) - rAS(m2);
+fT = fpAS(m3) - fpAS(m2);
+
 hCover = ((wstepS * i) + (wsizeS - wstepS)); # seconds covered
-printf("# Correlation min/max: %5.3f %5.3f\n",cMin,cMax);
-printf("# SNR min/max: %5.3f %5.3f\n",sMin,sMax);
-printf("# Residual min/max: %5.3f %5.3f\n",rMin,rMax);
-printf("# Fpeak (Hz) min/med/max: %5.3f %5.3f %5.3f\n",
-    fMin,fMedian,fMax);
-printf("# Bump frames: %d / %d  (%5.3f hours)\n",
+fprintf(fout,"# RMS:  %5.3f %5.3f %5.3f (%5.3f)\n",pMin,pMedian,pMax,pT);
+fprintf(fout,"# Res1: %5.3f %5.3f %5.3f (%5.3f)\n",rMin,rMedian,rMax,rT);
+fprintf(fout,"# Corr: %5.3f %5.3f %5.3f (%5.3f)\n",cMin,cMedian,cMax,cT);
+fprintf(fout,"# SNR:  %5.3f %5.3f %5.3f (%5.3f)\n",sMin,sMedian,sMax,sT);
+fprintf(fout,"# Fpk:  %5.3f %5.3f %5.3f (%5.3f)\n",fMin,fMedian,fMax,fT);
+fprintf(fout,"# Good frames: %d / %d\n",Ai-1,(Ai+bumpFrames-1));
+fprintf(fout,"# Bump frames: %d / %d  (%5.3f hours)\n",
     bumpFrames,i,hCover/3600);
-# doplot();
-
-#print ("-S1920,900", "-dsvg", "test1.svg");
-
-#loglog(xf,Pxx);  # log-log plot of power spectrum
-# axis([0.01 0.5 1 200])
-
-# hold off; plot(res1); hold on; grid on; axis("tight"); plot(w1f);
-# Plot both channels, scaled to best RMS amplitude match:
-# plot(w1f); hold on; plot(w2fs); grid on; axis("tight"); hold off;
 
 # --------------
 #{
