@@ -6,7 +6,7 @@
 #   which is often some kind of local glitch or failure
 #
 # Takes three arguments: two input filenames, one output filename
-# J.Beale 28-JAN-2021
+# J.Beale 29-JAN-2021
 # -------------------------------------------------------------------
 
 pkg load signal                  # for high & low-pass filter
@@ -40,6 +40,12 @@ dir="/home/pi/hammer/obspy";  # working directory
 arg_list = argv ();        # command-line inputs to this function
 args = length(arg_list);   # how many args?
 
+#{
+fname1 = '2021-01-29T1600_SHARK.csv'
+fname2 = '2021-01-29T1600_SHRK2.csv'
+fname3 = 'out.csv'
+#}
+
 if (args < 3)
   printf("Usage: quakeCor1 <fname1> <fname2> <fout>\n");
   printf(" filenames of two CSV files to compare, and output file\n");
@@ -49,6 +55,8 @@ else
   fname2 = arg_list{2};      # data file #2
   fname3 = arg_list{3};      # output file
 endif
+
+
 
 # ===================================================================
 
@@ -132,11 +140,13 @@ endfunction
 
 
   # initialize min,max vars with opposite extrema
-pMin = 1e9; pMax = 0;    # averaged total RMS power in filtered signal
-cMin = 1.0; cMax = -1.0; # correlation 
+aMin = 1e9; aMax = -1e9;   # linear scale factor r1/r2
+bMin = 1e9; bMax = -1e9;   # peak (BP filtered) spectrum level, dB
+pMin = 1e9; pMax = 0;      # averaged total RMS power in filtered signal
+cMin = 1.0; cMax = -1.0;   # correlation 
 sMin = 1000; sMax = -1000; # SNR value (dB)
-rMin = 1e9;  rMax = 0; # 1st residual of linear fit
-fMin = 1e9;  fMax = 0; # frequency of power spectrum maximum
+rMin = 1e9;  rMax = 0;     # 1st residual of linear fit
+fMin = 1e9;  fMax = 0;     # frequency of power spectrum maximum
   
 f1=[dir "/" fname1];  # create full pathname
 f2=[dir "/" fname2];  # create full pathname
@@ -170,6 +180,8 @@ fpArray = zeros(n,1);  # initialize array large enough for all freq vals
 cArray = fpArray;      # initialize others same way
 sArray = fpArray;
 rArray = fpArray;
+aArray = fpArray;
+bArray = fpArray;
 
 Ai = 1; # pointer to current element of fpArray(), cArray() etc.
 
@@ -231,17 +243,19 @@ while (true)
   #res2 = w1f - res1;
   res2 = (w2fs - res1)/rs; # res2 in same scaling as w1f,w2fs,residual
   r2m = rms(res2);
-  SNR = (r1 / r2m);
+  SNR = (r3 / r1m);      # was (r1 / r2m)
   SNRdB = 20 * log(SNR);
 
   w12f = (w1f + w2fs)/2;    # average of both signals
-  [Pxx, w] = periodogram (w12f);  # power spectral density (real)
+  Pxx = periodogram (w12f);  # power spectral density (real)
+#  [Pxx, w] = periodogram (w12f);  # power spectral density (real)
+#  xf = linspace((fN/plen),fN,plen);  # frequency plot
+#  Pxx = sqrt(Pxx);
   plen = length(Pxx);
   fN = fs/2;     # Nyquist frequency = sample rate / 2  
-  xf = linspace((fN/plen),fN,plen);  # frequency plot
-  Pxx = sqrt(Pxx);
   [fpeak, ifpeak] = max(Pxx);  # find peak of frequency spectrum
-  fPk = xf(ifpeak);  # frequency at peak
+  fPk = ifpeak * (fN/plen);  # frequency (Hz) at (filtered) signal peak
+  fdB = 10*log10(fpeak);  # power (dB) at signal peak
 
   res2p = r2m*r1m;
   fprintf(fout,"%03d, %5.0f, %6.4f, %5.3f, %5.2f, %d, %5.4f, %5.4f\n",
@@ -253,13 +267,17 @@ while (true)
     bumpFrames = bumpFrames + 1;
   else
     # good frame: update records if this was a min or max value
+    [aMin aMax] = pksave(scalefac, aMin, aMax);  # r1/r2 scale factor
+    [bMin bMax] = pksave(fdB, bMin, bMax);  # peak signal level, dB
     [pMin pMax] = pksave(r3, pMin, pMax);  # avg RMS min & max
     [cMin cMax] = pksave(c, cMin, cMax);  # correlation min & max
     [sMin sMax] = pksave(SNRdB, sMin, sMax); # SNR min & max
     [rMin rMax] = pksave(r1m, rMin, rMax); # 1st Residual min & max
     [fMin fMax] = pksave(fPk, fMin, fMax); # 1st Residual min & max
-    pArray(Ai) = r3;     # record each correlation coeff.
-    cArray(Ai) = c;     # record each correlation coeff.
+    aArray(Ai) = scalefac; # record each scale factor
+    bArray(Ai) = fdB;      # peak signal level in dB
+    pArray(Ai) = r3;       # record each RMS avg
+    cArray(Ai) = c;        # record each correlation coeff.
     sArray(Ai) = SNRdB;
     rArray(Ai) = r1m;
     fpArray(Ai) = fPk;  # record each peak frequency
@@ -271,6 +289,8 @@ endwhile
 
 # =====================================================================
 #       sort all peak frequency readings, to enable finding median
+aAS  = sort(aArray(1:Ai-1));
+bAS  = sort(bArray(1:Ai-1));
 pAS  = sort(pArray(1:Ai-1));
 cAS  = sort(cArray(1:Ai-1));
 sAS  = sort(sArray(1:Ai-1));
@@ -281,6 +301,8 @@ mpoint = int32(Ai / 2);  # off-by-1/2 if Ai is even, but oh well
 m2 = int32(Ai / 3);
 m3 = m2*2;
 # find the median 
+aMedian = aAS(mpoint);
+bMedian = bAS(mpoint);
 pMedian = pAS(mpoint);
 cMedian = cAS(mpoint);
 sMedian = sAS(mpoint);
@@ -288,6 +310,8 @@ rMedian = rAS(mpoint);
 fMedian = fpAS(mpoint);  
 
 # find the width of the central 1/3 of the full distribution
+aT = aAS(m3) - aAS(m2);
+bT = bAS(m3) - bAS(m2);
 pT = pAS(m3) - pAS(m2);
 cT = cAS(m3) - cAS(m2);
 sT = sAS(m3) - sAS(m2);
@@ -295,14 +319,17 @@ rT = rAS(m3) - rAS(m2);
 fT = fpAS(m3) - fpAS(m2);
 
 hCover = ((wstepS * i) + (wsizeS - wstepS)); # seconds covered
-fprintf(fout,"# RMS:  %5.3f %5.3f %5.3f (%5.3f)\n",pMin,pMedian,pMax,pT);
-fprintf(fout,"# Res1: %5.3f %5.3f %5.3f (%5.3f)\n",rMin,rMedian,rMax,rT);
-fprintf(fout,"# Corr: %5.3f %5.3f %5.3f (%5.3f)\n",cMin,cMedian,cMax,cT);
-fprintf(fout,"# SNR:  %5.3f %5.3f %5.3f (%5.3f)\n",sMin,sMedian,sMax,sT);
-fprintf(fout,"# Fpk:  %5.3f %5.3f %5.3f (%5.3f)\n",fMin,fMedian,fMax,fT);
+fprintf(fout,"# Ratio:  %06.3f %06.3f %06.3f (%06.3f)\n",aMin,aMedian,aMax,aT);
+fprintf(fout,"# RMS:    %06.3f %06.3f %06.3f (%06.3f)\n",pMin,pMedian,pMax,pT);
+fprintf(fout,"# Res1:   %06.3f %06.3f %06.3f (%06.3f)\n",rMin,rMedian,rMax,rT);
+fprintf(fout,"# Corr:   %06.4f %06.4f %06.4f (%06.4f)\n",cMin,cMedian,cMax,cT);
+fprintf(fout,"# SNR:    %06.3f %06.3f %06.3f (%06.3f)\n",sMin,sMedian,sMax,sT);
+fprintf(fout,"# Fpk:    %06.3f %06.3f %06.3f (%06.3f)\n",fMin,fMedian,fMax,fT);
+fprintf(fout,"# Level:  %06.2f %06.2f %06.2f (%06.2f)\n",bMin,bMedian,bMax,bT);
 fprintf(fout,"# Good frames: %d / %d\n",Ai-1,(Ai+bumpFrames-1));
 fprintf(fout,"# Bump frames: %d / %d  (%5.3f hours)\n",
     bumpFrames,i,hCover/3600);
+fclose(fout);  # finished; close output file
 
 # --------------
 #{
