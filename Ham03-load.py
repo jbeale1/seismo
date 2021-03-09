@@ -6,18 +6,23 @@ from obspy.core.utcdatetime import UTCDateTime
 
 hours = 12          # hours of data to get (must be divisor of 24)
 dur = 60*60*hours   # 60 seconds * 60 minutes * hours
-tOffset = (0+4)*60*60   # time range set back this many seconds 
+tOffset = (-8)*60*60   # difference of local time (eg. PST) from UTC
 saveFile = True         # save out image file to drive
+outDir = "/home/pi/hammer/obspy/dayplots"  # where to save image
 
 # IP and port of Earthworm Server
 client3 = Client("192.168.1.249", 16022) # BBShark - HAM03
 r3 = client3.get_availability('*', '*', channel='EHZ')
   
-t = UTCDateTime()     # current UTC time right now
+tUTC = UTCDateTime()  # current UTC time right now
+t = tUTC + tOffset    # current local time right now
 # find most recent top of an even Nth hour (24/N per day)
 evenHour = hours*int(t.hour / hours)  # on even Nth hours
+#winEnd = UTCDateTime(t.year,t.month,t.day,evenHour, 0, 0)
 winEnd = UTCDateTime(t.year,t.month,t.day,evenHour, 0, 0) - tOffset
 winStart = winEnd - dur  # start time
+
+#exit()
 # winEnd = winStart + dur + 1 # one extra second beyond 'hours'
 
 pstStart = winStart - 8*60*60  # get Pacific Standard Time from UTC
@@ -25,7 +30,7 @@ pstString = str(pstStart)[:13]
 
 print("Requesting " + str(winStart) + " - " + str(winEnd))
 startStr = str(winStart)
-outName = r3[0][1]+"_"+pstString+".png"
+outName = outDir + "/" + r3[0][1]+"_"+pstString+".png"
 
 st = client3.get_waveforms(r3[0][0],r3[0][1],r3[0][2],r3[0][3], \
   winStart, winEnd)
