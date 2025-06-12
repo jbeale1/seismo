@@ -1,7 +1,7 @@
 # raspberryJam-v4 seismometer input has 3x MAX11200 24-bit ADC devices
 # apparently susceptible to constant-amplitude interference near 1 Hz
 # This code uses hand-tuned parameters and PLL tracking to remove it
-# J.Beale 11-June-2025 (with AI assistance)
+# J.Beale 11-June-2025 (much work done by Claude 3.5 & 4.0)
 
 import numpy as np
 import scipy.signal as signal
@@ -281,7 +281,7 @@ def simple_continuous_tracking(data, fs, f_target=1.0, window_length=8.0, update
     Ki = wn ** 2
     print(f"Loop gains: Kp={Kp:.4f}, Ki={Ki:.6f}")
 
-    # harmonic terms relative to fundamental
+    # harmonic terms relative to fundamental - these are hand-tuned
     h2_amp_ratio = 0.02    # relative to fundamental amplitude
     h2_phase_offset = -np.pi/2.0 # phase offset in radians
 
@@ -378,7 +378,7 @@ def simple_continuous_tracking(data, fs, f_target=1.0, window_length=8.0, update
         # Subtract the reference signal from the input block
         ref_harmonic_block = amp_est * (
               np.cos(phase_block)                                       # Fundamental
-            + h2_amp_ratio * np.cos(2 * phase_block + h2_phase_offset)  # 3rd harmonic
+            + h2_amp_ratio * np.cos(2 * phase_block + h2_phase_offset)  # 2nd harmonic
             + h3_amp_ratio * np.cos(3 * phase_block + h3_phase_offset)  # 3rd harmonic
             + h5_amp_ratio * np.cos(5 * phase_block + h5_phase_offset)  # 5th harmonic
         )
